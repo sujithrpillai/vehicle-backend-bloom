@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+pybloom_live
+pydantic
+pymongo
