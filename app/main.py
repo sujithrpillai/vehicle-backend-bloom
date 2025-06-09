@@ -1,6 +1,7 @@
 """Main Application"""
 import os
 import logging
+import random
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -39,6 +40,18 @@ def lifespan(app: FastAPI):
     logger.info("Loading Bloom filter on startup...")
     # Create Bloom fiter
     bloom = BloomFilter(capacity=1000, error_rate=0.1)
+    # If the collection is empty, create it with some sample data
+    if collection.count_documents({}) == 0:
+        logger.info("MongoDB collection is empty. Adding sample vehicles.")
+        vehicles = []
+        for i in range(1000):
+            vehicle_number =    f"{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}-" \
+                                f"{random.choice('123456789')}{random.choice('123456789')}-" \
+                                f"{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}-" \
+                                f"{random.randint(1000, 9999)}"
+            vehicles.append({"vehicle_number": vehicle_number})
+        collection.insert_many(vehicles)
+        logger.info("Sample vehicles added to MongoDB collection.")
     # Load vehicles from MongoDB into the Bloom filter
     for vehicle in collection.find():
         vehicle_to_add = vehicle['vehicle_number'].encode('utf-8')
@@ -53,9 +66,14 @@ def lifespan(app: FastAPI):
 
 # Initialize FastAPI app
 app = FastAPI(lifespan=lifespan)
+origins = [
+    "http://localhost",
+    "https://localhost:3000",
+    "http://localhost:8050",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for CORS
+    allow_origins=origins,  # Allow all origins for CORS
     allow_credentials=True,
     allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],  # Allow all headers
