@@ -1,12 +1,14 @@
 """Main Application"""
 import os
 import logging
-import random
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pybloom_live import BloomFilter
 from pymongo import MongoClient
+from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from starlette.responses import Response
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,9 +19,8 @@ class Vehicle(BaseModel):
     vehicle_to_check: str
 
 # MongoDB configuration
-# MongoDB configuration from environment variables
 mongo_host = os.getenv("MONGO_HOST", "mongo")
-mongo_port = int(os.getenv("MONGO_PORT", 27017))
+mongo_port = int(os.getenv("MONGO_PORT", "27017"))
 mongo_db = os.getenv("MONGO_DB", "vehicle_db")
 mongo_collection = os.getenv("MONGO_COLLECTION", "vehicles")
 mongo_user = os.getenv("MONGO_USER", "admin")
@@ -40,25 +41,13 @@ def lifespan(app: FastAPI):
     logger.info("Loading Bloom filter on startup...")
     # Create Bloom fiter
     bloom = BloomFilter(capacity=1000, error_rate=0.1)
-    # If the collection is empty, create it with some sample data
-    if collection.count_documents({}) == 0:
-        logger.info("MongoDB collection is empty. Adding sample vehicles.")
-        vehicles = []
-        for i in range(1000):
-            vehicle_number =    f"{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}-" \
-                                f"{random.choice('123456789')}{random.choice('123456789')}-" \
-                                f"{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}-" \
-                                f"{random.randint(1000, 9999)}"
-            vehicles.append({"vehicle_number": vehicle_number})
-        collection.insert_many(vehicles)
-        logger.info("Sample vehicles added to MongoDB collection.")
     # Load vehicles from MongoDB into the Bloom filter
     for vehicle in collection.find():
         vehicle_to_add = vehicle['vehicle_number'].encode('utf-8')
         bloom.add(vehicle_to_add)
     logger.info("Bloom filter loaded with vehicles from MongoDB.")
     # disconnect MongoDB client
-    # mongo_client.close()
+    mongo_client.close()
     # Store the bloom filter in the app state
     app.state.bloom = bloom
     yield
@@ -78,6 +67,14 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],  # Allow all headers
 )
+REQUEST_COUNT = Counter("http_requests_total", "Total HTTP requests", ["method", "endpoint"])
+@app.middleware("http")
+async def count_requests(request: Request, call_next):
+    """Middleware to count HTTP requests."""
+    response = await call_next(request)
+    REQUEST_COUNT.labels(method=request.method, endpoint=request.url.path).inc()
+    return response
+
 @app.post("/api/check_vehicle/")
 def check_vehicle(vehicle: Vehicle):
     """Check if a vehicle is in the Bloom filter."""
@@ -99,3 +96,8 @@ def get_vehicles():
 def health_check():
     """Health check endpoint."""
     return {"status": "ok", "message": "Vehicle API is running!"}
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus metrics endpoint."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

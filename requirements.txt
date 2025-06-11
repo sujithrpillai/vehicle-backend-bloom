@@ -3,3 +3,4 @@ uvicorn
 pybloom_live
 pydantic
 pymongo
+prometheus_client
